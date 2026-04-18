@@ -1,0 +1,22 @@
+# Ovládání
+
+- `W`, `A`, `S`, `D` - pohyb kamery v first-person režimu
+- `Q`, `E` - pohyb kamery nahoru a dolů
+- `LMB` + myš - rozhlížení
+- `V` - přepnutí perspektiva / ortho
+- `M` - přepnutí fill / wireframe / points
+- `N` - přepnutí triangle list / triangle strip
+- `B` - přepnutí parametrického povrchu
+- `0` - lit zobrazení
+- `1` - debug pozice
+- `2` - debug normály
+- `3` - debug UV souřadnic
+- `4` - debug hloubky
+- `5` - debug textury
+- `6` - přepnutí ambient složky
+- `7` - přepnutí diffuse složky
+- `8` - přepnutí specular složky
+- `T` - přepnutí textury zapnutá / vypnutá
+- `Šipky` - změna směru reflektoru
+- `[` / `]` - změna úhlu reflektoru
+- `R` - reset kamery
