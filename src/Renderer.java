@@ -21,15 +21,15 @@ public class Renderer extends AbstractRenderer {
 	private OGLModelOBJ staticBody;
 	private GridTopology topology = GridTopology.TRIANGLES;
 
-	// Proměnná pro výběr matematické funkce (0 až 5)
-	private int functionMode = 0;
+	private int functionMode = 0; // 0 až 5 pro matematické funkce
+	private int debugMode = 0;    // 0: barva, 1: pozice, 2: normály, 3: UV, 4: hloubka
 
 	@Override
 	public void init() {
 		super.init();
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-		glEnable(GL_DEPTH_TEST);
-		glDisable(GL_CULL_FACE);
+		glEnable(GL_DEPTH_TEST); // Zapnutí hloubkového testu (nutné pro 3D)
+		glDisable(GL_CULL_FACE); // Aby byly vidět obě strany ploch
 
 		int m = 50;
 		int n = 50;
@@ -39,7 +39,6 @@ public class Renderer extends AbstractRenderer {
 				new OGLBuffers.Attrib("inPosition", 3)
 		};
 
-		// Buffery pro obě topologie
 		int[] indicesList = GridMeshFactory.generateIndicesList(m, n);
 		buffersList = new OGLBuffers(vertices, attributes, indicesList);
 
@@ -47,9 +46,10 @@ public class Renderer extends AbstractRenderer {
 		buffersStrip = new OGLBuffers(vertices, attributes, indicesStrip);
 
 		try {
+			// Načtení externího modelu (např. konvice nebo krychle)
 			staticBody = new OGLModelOBJ("/obj/StaticBody.obj");
 		} catch (Exception e) {
-			throw new RuntimeException("Failed to load static body model", e);
+			System.err.println("Nepodařilo se načíst model StaticBody.obj!");
 		}
 
 		paramProgram = ShaderUtils.loadProgram("/shaders/start");
@@ -59,7 +59,7 @@ public class Renderer extends AbstractRenderer {
 	@Override
 	public void display() {
 		pass++;
-		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		drawProceduralBody();
@@ -69,40 +69,35 @@ public class Renderer extends AbstractRenderer {
 	private void drawProceduralBody() {
 		glUseProgram(paramProgram);
 
-		int timeLoc = glGetUniformLocation(paramProgram, "time");
-		glUniform1f(timeLoc, pass / 50.0f);
-
-		int modeLoc = glGetUniformLocation(paramProgram, "mode");
-		int offsetLoc = glGetUniformLocation(paramProgram, "offset");
+		// Odeslání společných parametrů
+		glUniform1f(glGetUniformLocation(paramProgram, "time"), pass / 50.0f);
+		glUniform1i(glGetUniformLocation(paramProgram, "mode"), functionMode);
+		glUniform1i(glGetUniformLocation(paramProgram, "debugMode"), debugMode);
+		glUniform1f(glGetUniformLocation(paramProgram, "offset"), -0.75f);
 
 		glPolygonMode(GL_FRONT_AND_BACK, renderMode);
-
-		glUniform1i(modeLoc, functionMode);
-		glUniform1f(offsetLoc, -0.75f);
 		drawGeometry();
 
 		glUseProgram(0);
 	}
 
 	private void drawStaticBody() {
-		if (staticBody == null || staticBody.getBuffers() == null) {
-			return;
-		}
+		if (staticBody == null || staticBody.getBuffers() == null) return;
 
 		glUseProgram(modelProgram);
 
+		// Matice modelu pro statické těleso (posun vpravo)
 		Mat4 model = new Mat4Scale(0.35).mul(new Mat4Transl(0.85, -0.15, 0.0));
-		int modelLoc = glGetUniformLocation(modelProgram, "uModel");
-		glUniformMatrix4fv(modelLoc, false, ToFloatArray.convert(model));
+		glUniformMatrix4fv(glGetUniformLocation(modelProgram, "uModel"), false, ToFloatArray.convert(model));
 
-		int colorLoc = glGetUniformLocation(modelProgram, "uColor");
-		glUniform3f(colorLoc, 0.85f, 0.75f, 0.25f);
+		// Debug mode pro statické těleso
+		glUniform1i(glGetUniformLocation(modelProgram, "debugMode"), debugMode);
+		glUniform3f(glGetUniformLocation(modelProgram, "uColor"), 0.85f, 0.75f, 0.25f);
 
 		staticBody.getBuffers().draw(staticBody.getTopology(), modelProgram);
 		glUseProgram(0);
 	}
 
-	// Pomocná metoda, aby kód nebyl duplicitní
 	private void drawGeometry() {
 		if (topology == GridTopology.TRIANGLES) {
 			if (buffersList != null) buffersList.draw(GL_TRIANGLES, paramProgram);
@@ -121,22 +116,28 @@ public class Renderer extends AbstractRenderer {
 		public void invoke(long window, int key, int scancode, int action, int mods) {
 			if (action == GLFW_PRESS) {
 				switch (key) {
-					// Režimy zobrazení (body, hrany, plochy)
+					// Režimy zobrazení
 					case GLFW_KEY_P -> renderMode = GL_POINT;
 					case GLFW_KEY_L -> renderMode = GL_LINE;
 					case GLFW_KEY_F -> renderMode = GL_FILL;
 
-					// Přepínání topologie
+					// Topologie
 					case GLFW_KEY_T -> topology = GridTopology.TRIANGLES;
 					case GLFW_KEY_S -> topology = GridTopology.TRIANGLE_STRIP;
 
-					// Výběr tělesa (1 až 6)
+					// Matematické funkce (levé těleso)
 					case GLFW_KEY_1 -> functionMode = 0;
 					case GLFW_KEY_2 -> functionMode = 1;
 					case GLFW_KEY_3 -> functionMode = 2;
 					case GLFW_KEY_4 -> functionMode = 3;
 					case GLFW_KEY_5 -> functionMode = 4;
 					case GLFW_KEY_6 -> functionMode = 5;
+
+					// PŘEPÍNÁNÍ DEBUG REŽIMŮ (Zadání bod 3)
+					case GLFW_KEY_M -> {
+						debugMode = (debugMode + 1) % 5;
+						System.out.println("Debug mode: " + debugMode);
+					}
 
 					case GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true);
 				}
