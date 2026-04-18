@@ -17,4 +17,6 @@
 | Shadow mapping | nesplněno | bude doplněno později |
 | Deferred shading a ambient occlusion | nesplněno | bude doplněno později |
 | Vizualizace pozice světla | splněno | světelný marker jako point |
+| Verzování pomocí gitu | splněno částečně | lokální repo a více commitů, remote/private repo není ověřeno |
+| Pravidelné komentované commity | splněno částečně | historie existuje, ale zatím je krátká |
 | Dokumentace ovládání | splněno | tento soubor |
