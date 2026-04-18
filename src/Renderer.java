@@ -1,16 +1,24 @@
 import lwjglutils.OGLBuffers;
+import lwjglutils.OGLModelOBJ;
 import lwjglutils.ShaderUtils;
+import lwjglutils.ToFloatArray;
 import org.lwjgl.glfw.GLFWKeyCallback;
+import transforms.Mat4;
+import transforms.Mat4Scale;
+import transforms.Mat4Transl;
+
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL20.*;
 
 public class Renderer extends AbstractRenderer {
 
-	private int shaderProgram;
+	private int paramProgram;
+	private int modelProgram;
 	private int renderMode = GL_FILL;
 	private OGLBuffers buffersList;
 	private OGLBuffers buffersStrip;
+	private OGLModelOBJ staticBody;
 	private GridTopology topology = GridTopology.TRIANGLES;
 
 	// Proměnná pro výběr matematické funkce (0 až 5)
@@ -19,10 +27,10 @@ public class Renderer extends AbstractRenderer {
 	@Override
 	public void init() {
 		super.init();
-		// Základní barva pozadí (pokud nepoužíváš super.display())
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glEnable(GL_DEPTH_TEST);
+		glDisable(GL_CULL_FACE);
 
-		// Generování hustší mřížky (např. 50x50), aby tělesa vypadala hladce
 		int m = 50;
 		int n = 50;
 
@@ -38,46 +46,68 @@ public class Renderer extends AbstractRenderer {
 		int[] indicesStrip = GridMeshFactory.generateIndicesStrip(m, n);
 		buffersStrip = new OGLBuffers(vertices, attributes, indicesStrip);
 
-		// Načtení shaderu
-		shaderProgram = ShaderUtils.loadProgram("/shaders/start");
+		try {
+			staticBody = new OGLModelOBJ("/obj/StaticBody.obj");
+		} catch (Exception e) {
+			throw new RuntimeException("Failed to load static body model", e);
+		}
+
+		paramProgram = ShaderUtils.loadProgram("/shaders/start");
+		modelProgram = ShaderUtils.loadProgram("/shaders/static");
 	}
 
 	@Override
 	public void display() {
-		super.display();
+		pass++;
 		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-		glUseProgram(shaderProgram);
+		drawProceduralBody();
+		drawStaticBody();
+	}
 
-		// Společné uniformy
-		int timeLoc = glGetUniformLocation(shaderProgram, "time");
+	private void drawProceduralBody() {
+		glUseProgram(paramProgram);
+
+		int timeLoc = glGetUniformLocation(paramProgram, "time");
 		glUniform1f(timeLoc, pass / 50.0f);
 
-		int modeLoc = glGetUniformLocation(shaderProgram, "mode");
-		int offsetLoc = glGetUniformLocation(shaderProgram, "offset");
+		int modeLoc = glGetUniformLocation(paramProgram, "mode");
+		int offsetLoc = glGetUniformLocation(paramProgram, "offset");
 
 		glPolygonMode(GL_FRONT_AND_BACK, renderMode);
 
-		// --- PRVNÍ TĚLESO (vlevo) ---
-		// Toto těleso přepínáš klávesami 1-6
 		glUniform1i(modeLoc, functionMode);
-		glUniform1f(offsetLoc, -0.6f);
+		glUniform1f(offsetLoc, -0.75f);
 		drawGeometry();
 
-		// --- DRUHÉ TĚLESO (vpravo) ---
-		// Zde nastavíme fixně mode 5 (Donut), aby tam byl jako druhý objekt
-		glUniform1i(modeLoc, 5);
-		glUniform1f(offsetLoc, 0.6f);
-		drawGeometry();
+		glUseProgram(0);
+	}
+
+	private void drawStaticBody() {
+		if (staticBody == null || staticBody.getBuffers() == null) {
+			return;
+		}
+
+		glUseProgram(modelProgram);
+
+		Mat4 model = new Mat4Scale(0.35).mul(new Mat4Transl(0.85, -0.15, 0.0));
+		int modelLoc = glGetUniformLocation(modelProgram, "uModel");
+		glUniformMatrix4fv(modelLoc, false, ToFloatArray.convert(model));
+
+		int colorLoc = glGetUniformLocation(modelProgram, "uColor");
+		glUniform3f(colorLoc, 0.85f, 0.75f, 0.25f);
+
+		staticBody.getBuffers().draw(staticBody.getTopology(), modelProgram);
+		glUseProgram(0);
 	}
 
 	// Pomocná metoda, aby kód nebyl duplicitní
 	private void drawGeometry() {
 		if (topology == GridTopology.TRIANGLES) {
-			if (buffersList != null) buffersList.draw(GL_TRIANGLES, shaderProgram);
+			if (buffersList != null) buffersList.draw(GL_TRIANGLES, paramProgram);
 		} else {
-			if (buffersStrip != null) buffersStrip.draw(GL_TRIANGLE_STRIP, shaderProgram);
+			if (buffersStrip != null) buffersStrip.draw(GL_TRIANGLE_STRIP, paramProgram);
 		}
 	}
 
