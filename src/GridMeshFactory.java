@@ -1,85 +1,77 @@
 import java.util.ArrayList;
 import java.util.List;
 
-import lwjglutils.OGLBuffers;
+public class GridMeshFactory {
 
-public final class GridMeshFactory {
+    /**
+     * Vygeneruje vrcholy mřížky v rovině XY v rozsahu -1 až 1.
+     */
+    public static float[] generateVertices(int m, int n) {
+        float[] vertices = new float[m * n * 3];
+        int index = 0;
 
-    private GridMeshFactory() {
-    }
+        for (int r = 0; r < n; r++) {
+            for (int c = 0; c < m; c++) {
+                float x = (c / (float) (m - 1)) * 2.0f - 1.0f;
+                float y = (r / (float) (n - 1)) * 2.0f - 1.0f;
+                float z = 0.0f;
 
-    public static OGLBuffers createGrid(int rows, int cols, GridTopology topology) {
-        if (rows < 2 || cols < 2) {
-            throw new IllegalArgumentException("Grid resolution must be at least 2x2");
-        }
-
-        float[] vertices = new float[rows * cols * 5];
-        int vertexOffset = 0;
-        for (int row = 0; row < rows; row++) {
-            float v = row / (float) (rows - 1);
-            float y = -1.0f + 2.0f * v;
-            for (int col = 0; col < cols; col++) {
-                float u = col / (float) (cols - 1);
-                float x = -1.0f + 2.0f * u;
-
-                vertices[vertexOffset++] = x;
-                vertices[vertexOffset++] = y;
-                vertices[vertexOffset++] = 0.0f;
-                vertices[vertexOffset++] = u;
-                vertices[vertexOffset++] = v;
+                vertices[index++] = x;
+                vertices[index++] = y;
+                vertices[index++] = z;
             }
         }
-
-        int[] indices = topology == GridTopology.TRIANGLE_LIST
-                ? createTriangleListIndices(rows, cols)
-                : createTriangleStripIndices(rows, cols);
-
-        return new OGLBuffers(vertices, new OGLBuffers.Attrib[]{
-                new OGLBuffers.Attrib("inPosition", 3),
-                new OGLBuffers.Attrib("inTexCoord", 2)
-        }, indices);
+        return vertices;
     }
 
-    private static int[] createTriangleListIndices(int rows, int cols) {
-        int[] indices = new int[(rows - 1) * (cols - 1) * 6];
-        int offset = 0;
-        for (int row = 0; row < rows - 1; row++) {
-            for (int col = 0; col < cols - 1; col++) {
-                int topLeft = row * cols + col;
-                int topRight = topLeft + 1;
-                int bottomLeft = topLeft + cols;
-                int bottomRight = bottomLeft + 1;
+    /**
+     * Varianta A: Seznam trojúhelníků (Triangle List)
+     * Upraveno tak, aby diagonály tvořily jiný vzor než Strip.
+     */
+    public static int[] generateIndicesList(int m, int n) {
+        int[] indices = new int[(m - 1) * (n - 1) * 6];
+        int index = 0;
 
-                indices[offset++] = topLeft;
-                indices[offset++] = bottomLeft;
-                indices[offset++] = topRight;
+        for (int r = 0; r < n - 1; r++) {
+            for (int c = 0; c < m - 1; c++) {
+                int i0 = r * m + c;          // vlevo dole
+                int i1 = r * m + (c + 1);    // vpravo dole
+                int i2 = (r + 1) * m + c;    // vlevo nahoře
+                int i3 = (r + 1) * m + (c + 1); // vpravo nahoře
 
-                indices[offset++] = topRight;
-                indices[offset++] = bottomLeft;
-                indices[offset++] = bottomRight;
+                // První trojúhelník (i0, i1, i3)
+                indices[index++] = i0;
+                indices[index++] = i1;
+                indices[index++] = i3;
+
+                // Druhý trojúhelník (i0, i3, i2)
+                indices[index++] = i0;
+                indices[index++] = i3;
+                indices[index++] = i2;
             }
         }
         return indices;
     }
 
-    private static int[] createTriangleStripIndices(int rows, int cols) {
+    /**
+     * Varianta B: Pás trojúhelníků (Triangle Strip)
+     * Generuje cik-cak propojení řádků.
+     */
+    public static int[] generateIndicesStrip(int m, int n) {
         List<Integer> indices = new ArrayList<>();
-        for (int row = 0; row < rows - 1; row++) {
-            if (row > 0) {
-                indices.add(row * cols);
+
+        for (int r = 0; r < n - 1; r++) {
+            for (int c = 0; c < m; c++) {
+                indices.add(r * m + c);         // horní bod
+                indices.add((r + 1) * m + c);   // spodní bod
             }
-            for (int col = 0; col < cols; col++) {
-                indices.add(row * cols + col);
-                indices.add((row + 1) * cols + col);
-            }
-            if (row < rows - 2) {
-                indices.add((row + 1) * cols + (cols - 1));
+
+            // Degenerované trojúhelníky pro přesun na nový řádek
+            if (r < n - 2) {
+                indices.add((r + 1) * m + (m - 1)); // zopakujeme poslední
+                indices.add((r + 1) * m);           // zopakujeme první nového řádku
             }
         }
-        int[] result = new int[indices.size()];
-        for (int i = 0; i < indices.size(); i++) {
-            result[i] = indices.get(i);
-        }
-        return result;
+        return indices.stream().mapToInt(Integer::intValue).toArray();
     }
 }
