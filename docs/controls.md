@@ -17,6 +17,7 @@
 - `7` - přepnutí diffuse složky
 - `8` - přepnutí specular složky
 - `T` - přepnutí textury zapnutá / vypnutá
+- `F` - přepnutí forward / deferred + AO
 - `Šipky` - změna směru reflektoru
 - `[` / `]` - změna úhlu reflektoru
 - `R` - reset kamery

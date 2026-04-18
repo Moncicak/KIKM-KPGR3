@@ -10,6 +10,7 @@ import java.util.Locale;
 import lwjglutils.OGLBuffers;
 import lwjglutils.OGLModelOBJ;
 import lwjglutils.OGLTexImageFloat;
+import lwjglutils.OGLRenderTarget;
 import lwjglutils.OGLTexture2D;
 import lwjglutils.ShaderUtils;
 import lwjglutils.ToFloatArray;
@@ -34,6 +35,7 @@ import static org.lwjgl.glfw.GLFW.GLFW_KEY_A;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_B;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_D;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_E;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_F;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT_SHIFT;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT;
@@ -65,6 +67,7 @@ import static org.lwjgl.opengl.GL11.GL_FRONT_AND_BACK;
 import static org.lwjgl.opengl.GL11.GL_LINES;
 import static org.lwjgl.opengl.GL11.GL_POINTS;
 import static org.lwjgl.opengl.GL11.GL_POLYGON_OFFSET_FILL;
+import static org.lwjgl.opengl.GL11.GL_TRIANGLE_STRIP;
 import static org.lwjgl.opengl.GL11.GL_TRIANGLES;
 import static org.lwjgl.opengl.GL11.glClear;
 import static org.lwjgl.opengl.GL11.glClearColor;
@@ -105,6 +108,7 @@ import static org.lwjgl.opengl.GL20.glGetUniformLocation;
 import static org.lwjgl.opengl.GL20.glIsProgram;
 import static org.lwjgl.opengl.GL20.glUniform1f;
 import static org.lwjgl.opengl.GL20.glUniform1i;
+import static org.lwjgl.opengl.GL20.glUniform2f;
 import static org.lwjgl.opengl.GL20.glUniform3f;
 import static org.lwjgl.opengl.GL20.glUniformMatrix4fv;
 import static org.lwjgl.opengl.GL20.glUseProgram;
@@ -126,6 +130,11 @@ public class Renderer extends AbstractRenderer {
     private int lightProgram;
     private int paramShadowProgram;
     private int meshShadowProgram;
+    private int paramDeferredProgram;
+    private int meshDeferredProgram;
+    private int aoProgram;
+    private int blurProgram;
+    private int compositeProgram;
 
     private OGLBuffers gridList;
     private OGLBuffers gridStrip;
@@ -134,6 +143,10 @@ public class Renderer extends AbstractRenderer {
     private OGLTexture2D surfaceTexture;
     private OGLTexture2D shadowDepthTexture;
     private int shadowFbo;
+    private OGLRenderTarget deferredTarget;
+    private OGLRenderTarget aoTarget;
+    private OGLRenderTarget aoBlurTarget;
+    private OGLBuffers screenQuad;
 
     private GridTopology gridTopology = GridTopology.TRIANGLE_LIST;
     private SurfaceType surfaceType = SurfaceType.CARTESIAN_WAVE;
@@ -143,6 +156,7 @@ public class Renderer extends AbstractRenderer {
     private boolean useDiffuse = true;
     private boolean useSpecular = true;
     private boolean useTexture = true;
+    private boolean useDeferred = true;
     private double spotlightYaw = Math.PI;
     private double spotlightPitch = -0.65;
     private double spotlightInnerDegrees = 18.0;
@@ -179,8 +193,16 @@ public class Renderer extends AbstractRenderer {
         lightProgram = ShaderUtils.loadProgram("shaders/light");
         paramShadowProgram = ShaderUtils.loadProgram(new String[]{"shaders/parametric", "shaders/shadow"});
         meshShadowProgram = ShaderUtils.loadProgram(new String[]{"shaders/mesh", "shaders/shadow"});
+        paramDeferredProgram = ShaderUtils.loadProgram(new String[]{"shaders/parametric_gbuffer", "shaders/gbuffer"});
+        meshDeferredProgram = ShaderUtils.loadProgram(new String[]{"shaders/mesh_gbuffer", "shaders/gbuffer"});
+        aoProgram = ShaderUtils.loadProgram(new String[]{"shaders/screen", "shaders/ao"});
+        blurProgram = ShaderUtils.loadProgram(new String[]{"shaders/screen", "shaders/blur"});
+        compositeProgram = ShaderUtils.loadProgram(new String[]{"shaders/screen", "shaders/composite"});
+
+        screenQuad = createScreenQuad();
 
         setupShadowMap();
+        setupDeferredTargets();
 
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_CULL_FACE);
@@ -209,8 +231,12 @@ public class Renderer extends AbstractRenderer {
 
         renderShadowPass(lightViewProjection, time);
 
-        drawParametricSurface(view, projection, lightViewProjection, cameraPosition, lightPosition, time);
-        drawElephant(view, projection, lightViewProjection, cameraPosition, lightPosition, time);
+        if (useDeferred && debugView == DebugView.LIT) {
+            renderDeferredPipeline(view, projection, lightViewProjection, cameraPosition, lightPosition, time);
+        } else {
+            drawParametricSurface(view, projection, lightViewProjection, cameraPosition, lightPosition, time);
+            drawElephant(view, projection, lightViewProjection, cameraPosition, lightPosition, time);
+        }
         drawLightMarker(view, projection, lightPosition);
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -244,6 +270,124 @@ public class Renderer extends AbstractRenderer {
         setCommonLitUniforms(meshProgram, model, mvp, lightViewProjection, cameraPosition, lightPosition, new Vec3D(0.85, 0.82, 0.78), surfaceTexture, debugView);
         elephantModel.getBuffers().draw(elephantModel.getTopology(), meshProgram);
         glUseProgram(0);
+    }
+
+    private void renderDeferredPipeline(Mat4 view, Mat4 projection, Mat4 lightViewProjection, Vec3D cameraPosition, Vec3D lightPosition, double time) {
+        ensureDeferredTargets();
+        drawParametricSurfaceDeferred(view, projection, time);
+        drawElephantDeferred(view, projection, time);
+        renderAoPass(view);
+        renderBlurPass();
+        renderDeferredComposite(view, projection, lightViewProjection, cameraPosition, lightPosition);
+    }
+
+    private void drawParametricSurfaceDeferred(Mat4 view, Mat4 projection, double time) {
+        OGLBuffers mesh = gridTopology == GridTopology.TRIANGLE_LIST ? gridList : gridStrip;
+        Mat4 model = new Mat4Scale(1.9, 1.9, 1.9).mul(new Mat4Transl(-2.4, 0.0, 0.0));
+        Mat4 mvp = model.mul(view).mul(projection);
+
+        glUseProgram(paramDeferredProgram);
+        setCommonDeferredUniforms(paramDeferredProgram, model, mvp, view, new Vec3D(1.0, 1.0, 1.0), surfaceTexture);
+        glUniform1f(glGetUniformLocation(paramDeferredProgram, "uTime"), (float) time);
+        glUniform1i(glGetUniformLocation(paramDeferredProgram, "uSurfaceType"), surfaceType.getIndex());
+        mesh.draw(gridTopology.getGlTopology(), paramDeferredProgram);
+        glUseProgram(0);
+    }
+
+    private void drawElephantDeferred(Mat4 view, Mat4 projection, double time) {
+        if (elephantModel == null || elephantModel.getBuffers() == null) {
+            return;
+        }
+
+        Mat4 model = new Mat4Scale(0.9, 0.9, 0.9)
+                .mul(new Mat4RotXYZ(0.0, time * 0.45, 0.0))
+                .mul(new Mat4Transl(3.0, -0.2, -0.8));
+        Mat4 mvp = model.mul(view).mul(projection);
+
+        glUseProgram(meshDeferredProgram);
+        setCommonDeferredUniforms(meshDeferredProgram, model, mvp, view, new Vec3D(0.85, 0.82, 0.78), surfaceTexture);
+        elephantModel.getBuffers().draw(elephantModel.getTopology(), meshDeferredProgram);
+        glUseProgram(0);
+    }
+
+    private void renderAoPass(Mat4 view) {
+        aoTarget.bind();
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glUseProgram(aoProgram);
+        bindDeferredInputs(aoProgram, 0, 1);
+        deferredTarget.bindColorTexture(aoProgram, "uPositionTex", 0, 0);
+        deferredTarget.bindColorTexture(aoProgram, "uNormalTex", 1, 1);
+        glUniformMatrix4fv(glGetUniformLocation(aoProgram, "uView"), false, ToFloatArray.convert(view));
+        glUniform1i(glGetUniformLocation(aoProgram, "uKernelSize"), 3);
+        glUniform1f(glGetUniformLocation(aoProgram, "uRadius"), 0.9f);
+        screenQuad.draw(GL_TRIANGLE_STRIP, aoProgram);
+        glUseProgram(0);
+    }
+
+    private void renderBlurPass() {
+        aoBlurTarget.bind();
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glUseProgram(blurProgram);
+        aoTarget.bindColorTexture(blurProgram, "uAOTex", 0);
+        glUniform2f(glGetUniformLocation(blurProgram, "uTexelSize"), 1.0f / aoTarget.getWidth(), 1.0f / aoTarget.getHeight());
+        screenQuad.draw(GL_TRIANGLE_STRIP, blurProgram);
+        glUseProgram(0);
+    }
+
+    private void renderDeferredComposite(Mat4 view, Mat4 projection, Mat4 lightViewProjection, Vec3D cameraPosition, Vec3D lightPosition) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, width, height);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glDisable(GL_DEPTH_TEST);
+        glUseProgram(compositeProgram);
+        deferredTarget.bindColorTexture(compositeProgram, "uPositionTex", 0, 0);
+        deferredTarget.bindColorTexture(compositeProgram, "uNormalTex", 1, 1);
+        deferredTarget.bindColorTexture(compositeProgram, "uAlbedoTex", 2, 2);
+        aoBlurTarget.bindColorTexture(compositeProgram, "uAOTexture", 3, 0);
+        shadowDepthTexture.bind(compositeProgram, "uShadowMap", 4);
+        glUniformMatrix4fv(glGetUniformLocation(compositeProgram, "uShadowMvp"), false, ToFloatArray.convert(lightViewProjection));
+        glUniform3f(glGetUniformLocation(compositeProgram, "uCameraPos"),
+                (float) cameraPosition.getX(),
+                (float) cameraPosition.getY(),
+                (float) cameraPosition.getZ());
+        glUniform3f(glGetUniformLocation(compositeProgram, "uLightPos"),
+                (float) lightPosition.getX(),
+                (float) lightPosition.getY(),
+                (float) lightPosition.getZ());
+        Vec3D spotDirection = computeSpotDirection();
+        glUniform3f(glGetUniformLocation(compositeProgram, "uSpotDirection"),
+                (float) spotDirection.getX(),
+                (float) spotDirection.getY(),
+                (float) spotDirection.getZ());
+        glUniform3f(glGetUniformLocation(compositeProgram, "uSpotAttenuation"), 1.0f, 0.05f, 0.01f);
+        glUniform1f(glGetUniformLocation(compositeProgram, "uSpotInnerCutoff"), (float) Math.cos(Math.toRadians(spotlightInnerDegrees)));
+        glUniform1f(glGetUniformLocation(compositeProgram, "uSpotOuterCutoff"), (float) Math.cos(Math.toRadians(spotlightOuterDegrees)));
+        glUniform1i(glGetUniformLocation(compositeProgram, "uUseAmbient"), useAmbient ? 1 : 0);
+        glUniform1i(glGetUniformLocation(compositeProgram, "uUseDiffuse"), useDiffuse ? 1 : 0);
+        glUniform1i(glGetUniformLocation(compositeProgram, "uUseSpecular"), useSpecular ? 1 : 0);
+        glUniform3f(glGetUniformLocation(compositeProgram, "uBaseColor"), 1.0f, 1.0f, 1.0f);
+        screenQuad.draw(GL_TRIANGLE_STRIP, compositeProgram);
+        glEnable(GL_DEPTH_TEST);
+        glUseProgram(0);
+    }
+
+    private void setCommonDeferredUniforms(int program, Mat4 model, Mat4 mvp, Mat4 view, Vec3D baseColor, OGLTexture2D texture) {
+        glUniformMatrix4fv(glGetUniformLocation(program, "uMvp"), false, ToFloatArray.convert(mvp));
+        glUniformMatrix4fv(glGetUniformLocation(program, "uModel"), false, ToFloatArray.convert(model));
+        glUniformMatrix4fv(glGetUniformLocation(program, "uView"), false, ToFloatArray.convert(view));
+        glUniform3f(glGetUniformLocation(program, "uBaseColor"),
+                (float) baseColor.getX(),
+                (float) baseColor.getY(),
+                (float) baseColor.getZ());
+        glUniform1i(glGetUniformLocation(program, "uUseTexture"), useTexture ? 1 : 0);
+        if (useTexture) {
+            texture.bind(program, "uTexture", 0);
+        }
+    }
+
+    private void bindDeferredInputs(int program, int posSlot, int normalSlot) {
+        deferredTarget.bindColorTexture(program, "uPositionTex", posSlot, 0);
+        deferredTarget.bindColorTexture(program, "uNormalTex", normalSlot, 1);
     }
 
     private void renderShadowPass(Mat4 lightViewProjection, double time) {
@@ -385,11 +529,12 @@ public class Renderer extends AbstractRenderer {
         textRenderer.addStr2D(8, 40, "WASD move, Q/E up/down, hold LMB look, V projection, M mode, N grid, B surface");
         textRenderer.addStr2D(8, 60, "0 lit, 1 pos, 2 normal, 3 uv, 4 depth, 5 texture, R reset");
         textRenderer.addStr2D(8, 80, String.format(Locale.US,
-                "ambient[%s] diffuse[%s] specular[%s] texture[%s] 6/7/8/T toggle",
+                "ambient[%s] diffuse[%s] specular[%s] texture[%s] deferred[%s] 6/7/8/T/F toggle",
                 useAmbient ? "on" : "off",
                 useDiffuse ? "on" : "off",
                 useSpecular ? "on" : "off",
-                useTexture ? "on" : "off"));
+                useTexture ? "on" : "off",
+                useDeferred ? "on" : "off"));
         textRenderer.addStr2D(8, 100, String.format(Locale.US,
                 "shadow map: %dx%d, spotlight yaw/pitch and soft edge: arrows + [ ]",
                 SHADOW_SIZE, SHADOW_SIZE));
@@ -408,6 +553,7 @@ public class Renderer extends AbstractRenderer {
         textRenderer.addStr2D(8, 160, String.format(Locale.US,
                 "spotlight dir yaw %.2f pitch %.2f inner %.1f outer %.1f",
                 spotlightYaw, spotlightPitch, spotlightInnerDegrees, spotlightOuterDegrees));
+        textRenderer.addStr2D(8, 180, "F toggles deferred shading + AO preview");
         textRenderer.draw();
     }
 
@@ -453,6 +599,32 @@ public class Renderer extends AbstractRenderer {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
         glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, new float[]{1.0f, 1.0f, 1.0f, 1.0f});
+    }
+
+    private void setupDeferredTargets() {
+        deferredTarget = new OGLRenderTarget(width, height, 3);
+        aoTarget = new OGLRenderTarget(width, height, 1);
+        aoBlurTarget = new OGLRenderTarget(width, height, 1);
+    }
+
+    private void ensureDeferredTargets() {
+        if (deferredTarget == null || deferredTarget.getWidth() != width || deferredTarget.getHeight() != height) {
+            setupDeferredTargets();
+        }
+    }
+
+    private OGLBuffers createScreenQuad() {
+        float[] vertexData = {
+                -1.0f, -1.0f, 0.0f, 0.0f,
+                 1.0f, -1.0f, 1.0f, 0.0f,
+                -1.0f,  1.0f, 0.0f, 1.0f,
+                 1.0f,  1.0f, 1.0f, 1.0f
+        };
+        int[] indexData = {0, 1, 2, 3};
+        return new OGLBuffers(vertexData, new OGLBuffers.Attrib[]{
+                new OGLBuffers.Attrib("inPosition", 2),
+                new OGLBuffers.Attrib("inTexCoord", 2)
+        }, indexData);
     }
 
     private OGLBuffers createLightMarker() {
@@ -507,6 +679,8 @@ public class Renderer extends AbstractRenderer {
                     useSpecular = !useSpecular;
                 } else if (key == GLFW_KEY_T) {
                     useTexture = !useTexture;
+                } else if (key == GLFW_KEY_F) {
+                    useDeferred = !useDeferred;
                 }
             }
         }

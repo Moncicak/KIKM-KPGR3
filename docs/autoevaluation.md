@@ -15,7 +15,7 @@
 | Řízení směru a úhlu reflektoru | splněno | `šipky` mění směr, `[` a `]` mění úhel |
 | Shadow mapping | splněno částečně | depth pass + sampling v lighting pass |
 | Shadow mapping | nesplněno | bude doplněno později |
-| Deferred shading a ambient occlusion | nesplněno | bude doplněno později |
+| Deferred shading a ambient occlusion | splněno | G-buffer, AO pass, blur a finální composite, `F` přepíná režim |
 | Vizualizace pozice světla | splněno | světelný marker jako point |
 | Verzování pomocí gitu | splněno částečně | lokální repo a více commitů, remote/private repo není ověřeno |
 | Pravidelné komentované commity | splněno částečně | historie existuje, ale zatím je krátká |
