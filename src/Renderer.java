@@ -33,8 +33,9 @@ public class Renderer extends AbstractRenderer {
 	private double oldX, oldY;
 	private boolean isPerspective = true;
 
-	// --- OSVĚTLENÍ (Bod 6) ---
-	private Vec3D lightPos = new Vec3D(2, 2, 2);
+	// --- OSVĚTLENÍ (Reflektor + Útlum + Znázornění) ---
+	private Vec3D lightPos = new Vec3D(1.5, 1.5, 2.0);
+	private Vec3D lightDir = new Vec3D(-1.0, -1.0, -1.0); // Směr, kam reflektor svítí
 
 	@Override
 	public void init() {
@@ -54,12 +55,13 @@ public class Renderer extends AbstractRenderer {
 		try {
 			staticBody = new OGLModelOBJ("/obj/StaticBody.obj");
 		} catch (Exception e) {
-			System.err.println("Nepodařilo se načíst model!");
+			System.err.println("Nepodařilo se načíst model StaticBody.obj!");
 		}
 
 		paramProgram = ShaderUtils.loadProgram("/shaders/start");
 		modelProgram = ShaderUtils.loadProgram("/shaders/static");
 
+		// Výchozí nastavení kamery
 		camera = camera.withPosition(new Vec3D(0, -3, 1))
 				.withAzimuth(Math.PI / 2)
 				.withZenith(-Math.PI / 8);
@@ -74,6 +76,7 @@ public class Renderer extends AbstractRenderer {
 		glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+		// --- NASTAVENÍ PROJEKCE ---
 		double aspect = height / (double) (width > 0 ? width : 1);
 		if (isPerspective) {
 			projection = new Mat4PerspRH(Math.PI / 3, aspect, 0.1, 50.0);
@@ -81,12 +84,16 @@ public class Renderer extends AbstractRenderer {
 			projection = new Mat4OrthoRH(2.5 / aspect, 2.5, 0.1, 50.0);
 		}
 
+		// --- KRESLENÍ ---
 		drawProceduralBody();
 		drawStaticBody();
+		drawLightSource(); // Znázornění zdroje světla v prostoru
 
+		// --- TEXTOVÝ VÝSTUP ---
 		textRenderer.clear();
-		textRenderer.addStr2D(3, 20, "WSAD: pohyb | Myš: rozhlížení | Šipky: rotace");
-		textRenderer.addStr2D(3, 40, "IJKL: pohyb světla | O: Projekce | M: Režim osvětlení: " + debugMode);
+		textRenderer.addStr2D(3, 20, "WSAD: pohyb kamery | Myš: rozhlížení | Šipky: rotace modelu");
+		textRenderer.addStr2D(3, 40, "IJKU: pohyb světla | O: Přepnout projekci (" + (isPerspective ? "Persp" : "Orto") + ")");
+		textRenderer.addStr2D(3, 60, "M: Režim osvětlení (0: vše, 1: amb, 2: diff, 3: spec)");
 		textRenderer.draw();
 	}
 
@@ -104,12 +111,13 @@ public class Renderer extends AbstractRenderer {
 		Mat4 modelMatrix = new Mat4Transl(-0.6, 0, 0).mul(new Mat4RotXYZ(rotX, rotY, 0));
 		Mat4 mvp = modelMatrix.mul(camera.getViewMatrix()).mul(projection);
 
-		// Posílání matic
+		// Matice
 		glUniformMatrix4fv(glGetUniformLocation(paramProgram, "modelViewProjection"), false, ToFloatArray.convert(mvp));
 		glUniformMatrix4fv(glGetUniformLocation(paramProgram, "modelMatrix"), false, ToFloatArray.convert(modelMatrix));
 
-		// Posílání dat pro světlo (Blinn-Phong)
+		// Reflektor, útlum a Blinn-Phong data
 		glUniform3f(glGetUniformLocation(paramProgram, "lightPos"), (float)lightPos.getX(), (float)lightPos.getY(), (float)lightPos.getZ());
+		glUniform3f(glGetUniformLocation(paramProgram, "lightDirUniform"), (float)lightDir.getX(), (float)lightDir.getY(), (float)lightDir.getZ());
 		glUniform3f(glGetUniformLocation(paramProgram, "viewPos"), (float)camera.getPosition().getX(), (float)camera.getPosition().getY(), (float)camera.getPosition().getZ());
 
 		glUniform1f(glGetUniformLocation(paramProgram, "time"), pass / 50.0f);
@@ -130,11 +138,26 @@ public class Renderer extends AbstractRenderer {
 		glUniformMatrix4fv(glGetUniformLocation(modelProgram, "modelViewProjection"), false, ToFloatArray.convert(mvp));
 		glUniformMatrix4fv(glGetUniformLocation(modelProgram, "modelMatrix"), false, ToFloatArray.convert(model));
 
+		// Světlo pro statické těleso (aby taky bylo stínované)
 		glUniform3f(glGetUniformLocation(modelProgram, "lightPos"), (float)lightPos.getX(), (float)lightPos.getY(), (float)lightPos.getZ());
 		glUniform3f(glGetUniformLocation(modelProgram, "viewPos"), (float)camera.getPosition().getX(), (float)camera.getPosition().getY(), (float)camera.getPosition().getZ());
 
 		glUniform1i(glGetUniformLocation(modelProgram, "debugMode"), debugMode);
 		glUniform3f(glGetUniformLocation(modelProgram, "uColor"), 0.85f, 0.75f, 0.25f);
+
+		staticBody.getBuffers().draw(staticBody.getTopology(), modelProgram);
+	}
+
+	private void drawLightSource() {
+		if (staticBody == null || staticBody.getBuffers() == null) return;
+		glUseProgram(modelProgram);
+
+		// Malá bílá kostička znázorňující zdroj světla
+		Mat4 model = new Mat4Transl(lightPos).mul(new Mat4Scale(0.05));
+		Mat4 mvp = model.mul(camera.getViewMatrix()).mul(projection);
+
+		glUniformMatrix4fv(glGetUniformLocation(modelProgram, "modelViewProjection"), false, ToFloatArray.convert(mvp));
+		glUniform3f(glGetUniformLocation(modelProgram, "uColor"), 1.0f, 1.0f, 1.0f); // Bílá
 
 		staticBody.getBuffers().draw(staticBody.getTopology(), modelProgram);
 	}
@@ -167,7 +190,7 @@ public class Renderer extends AbstractRenderer {
 						case GLFW_KEY_4 -> functionMode = 3;
 						case GLFW_KEY_5 -> functionMode = 4;
 						case GLFW_KEY_6 -> functionMode = 5;
-						case GLFW_KEY_M -> debugMode = (debugMode + 1) % 4; // Režimy 0-3 pro složky světla
+						case GLFW_KEY_M -> debugMode = (debugMode + 1) % 4;
 						case GLFW_KEY_O -> isPerspective = !isPerspective;
 
 						case GLFW_KEY_UP -> rotX += 0.1f;
@@ -175,12 +198,11 @@ public class Renderer extends AbstractRenderer {
 						case GLFW_KEY_LEFT -> rotY -= 0.1f;
 						case GLFW_KEY_RIGHT -> rotY += 0.1f;
 
-						// OVLÁDÁNÍ SVĚTLA
-						// OVLÁDÁNÍ SVĚTLA (nahrazeno L za U)
-						case GLFW_KEY_I -> lightPos = lightPos.add(new Vec3D(0, 0, 0.5));  // Nahoru
-						case GLFW_KEY_K -> lightPos = lightPos.add(new Vec3D(0, 0, -0.5)); // Dolů
-						case GLFW_KEY_J -> lightPos = lightPos.add(new Vec3D(-0.5, 0, 0)); // Vlevo
-						case GLFW_KEY_U -> lightPos = lightPos.add(new Vec3D(0.5, 0, 0));  // Vpravo
+						// Ovládání pozice světla
+						case GLFW_KEY_I -> lightPos = lightPos.add(new Vec3D(0, 0, 0.2));
+						case GLFW_KEY_K -> lightPos = lightPos.add(new Vec3D(0, 0, -0.2));
+						case GLFW_KEY_J -> lightPos = lightPos.add(new Vec3D(-0.2, 0, 0));
+						case GLFW_KEY_U -> lightPos = lightPos.add(new Vec3D(0.2, 0, 0));
 
 						case GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true);
 					}
