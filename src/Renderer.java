@@ -31,6 +31,10 @@ public class Renderer extends AbstractRenderer {
 	private boolean[] keys = new boolean[1024];
 	private boolean mousePressed = false;
 	private double oldX, oldY;
+	private boolean isPerspective = true;
+
+	// --- OSVĚTLENÍ (Bod 6) ---
+	private Vec3D lightPos = new Vec3D(2, 2, 2);
 
 	@Override
 	public void init() {
@@ -63,26 +67,26 @@ public class Renderer extends AbstractRenderer {
 
 	@Override
 	public void display() {
-		// Plynulý pohyb kamery
 		updateCamera();
-
-		// DŮLEŽITÉ: pass++ musíme volat ručně, protože nepoužíváme super.display()
 		pass++;
 
 		glViewport(0, 0, width, height);
 		glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-		// Aktualizace projekce pro případ změny velikosti okna
-		projection = new Mat4PerspRH(Math.PI / 3, height / (double) (width > 0 ? width : 1), 0.1, 50.0);
+		double aspect = height / (double) (width > 0 ? width : 1);
+		if (isPerspective) {
+			projection = new Mat4PerspRH(Math.PI / 3, aspect, 0.1, 50.0);
+		} else {
+			projection = new Mat4OrthoRH(2.5 / aspect, 2.5, 0.1, 50.0);
+		}
 
 		drawProceduralBody();
 		drawStaticBody();
 
-		// TextRenderer z AbstractRendereru
 		textRenderer.clear();
-		textRenderer.addStr2D(3, 20, "WSAD: pohyb kamery | Myš: rozhlížení | Šipky: rotace modelu");
-		textRenderer.addStr2D(3, 40, "1-6: funkce | M: debug režimy");
+		textRenderer.addStr2D(3, 20, "WSAD: pohyb | Myš: rozhlížení | Šipky: rotace");
+		textRenderer.addStr2D(3, 40, "IJKL: pohyb světla | O: Projekce | M: Režim osvětlení: " + debugMode);
 		textRenderer.draw();
 	}
 
@@ -97,16 +101,17 @@ public class Renderer extends AbstractRenderer {
 	private void drawProceduralBody() {
 		glUseProgram(paramProgram);
 
-		// ODEBRÁNO: (pass / 100.0) - nyní rotaci určují pouze šipky
-		Mat4 modelMatrix = new Mat4Transl(-0.6, 0, 0)
-				.mul(new Mat4RotXYZ(rotX, rotY, 0));
-
-		// MVP = Model * View * Projection
+		Mat4 modelMatrix = new Mat4Transl(-0.6, 0, 0).mul(new Mat4RotXYZ(rotX, rotY, 0));
 		Mat4 mvp = modelMatrix.mul(camera.getViewMatrix()).mul(projection);
 
+		// Posílání matic
 		glUniformMatrix4fv(glGetUniformLocation(paramProgram, "modelViewProjection"), false, ToFloatArray.convert(mvp));
+		glUniformMatrix4fv(glGetUniformLocation(paramProgram, "modelMatrix"), false, ToFloatArray.convert(modelMatrix));
 
-		// Čas (pass) posíláme dál jen pro vlnění povrchu (např. u Sombrera)
+		// Posílání dat pro světlo (Blinn-Phong)
+		glUniform3f(glGetUniformLocation(paramProgram, "lightPos"), (float)lightPos.getX(), (float)lightPos.getY(), (float)lightPos.getZ());
+		glUniform3f(glGetUniformLocation(paramProgram, "viewPos"), (float)camera.getPosition().getX(), (float)camera.getPosition().getY(), (float)camera.getPosition().getZ());
+
 		glUniform1f(glGetUniformLocation(paramProgram, "time"), pass / 50.0f);
 		glUniform1i(glGetUniformLocation(paramProgram, "mode"), functionMode);
 		glUniform1i(glGetUniformLocation(paramProgram, "debugMode"), debugMode);
@@ -119,14 +124,15 @@ public class Renderer extends AbstractRenderer {
 		if (staticBody == null || staticBody.getBuffers() == null) return;
 		glUseProgram(modelProgram);
 
-		// Modelová matice pro statické těleso (posun vpravo)
 		Mat4 model = new Mat4Transl(0.6, 0, 0).mul(new Mat4Scale(0.35));
-
-		// MVP pro statické těleso
 		Mat4 mvp = model.mul(camera.getViewMatrix()).mul(projection);
 
-		// Pozor: v static.vert musíš mít taky "modelViewProjection" uniformu
 		glUniformMatrix4fv(glGetUniformLocation(modelProgram, "modelViewProjection"), false, ToFloatArray.convert(mvp));
+		glUniformMatrix4fv(glGetUniformLocation(modelProgram, "modelMatrix"), false, ToFloatArray.convert(model));
+
+		glUniform3f(glGetUniformLocation(modelProgram, "lightPos"), (float)lightPos.getX(), (float)lightPos.getY(), (float)lightPos.getZ());
+		glUniform3f(glGetUniformLocation(modelProgram, "viewPos"), (float)camera.getPosition().getX(), (float)camera.getPosition().getY(), (float)camera.getPosition().getZ());
+
 		glUniform1i(glGetUniformLocation(modelProgram, "debugMode"), debugMode);
 		glUniform3f(glGetUniformLocation(modelProgram, "uColor"), 0.85f, 0.75f, 0.25f);
 
@@ -147,7 +153,6 @@ public class Renderer extends AbstractRenderer {
 			@Override
 			public void invoke(long window, int key, int scancode, int action, int mods) {
 				if (key < 0 || key >= 1024) return;
-
 				if (action == GLFW_PRESS) keys[key] = true;
 				else if (action == GLFW_RELEASE) keys[key] = false;
 
@@ -162,12 +167,20 @@ public class Renderer extends AbstractRenderer {
 						case GLFW_KEY_4 -> functionMode = 3;
 						case GLFW_KEY_5 -> functionMode = 4;
 						case GLFW_KEY_6 -> functionMode = 5;
-						case GLFW_KEY_M -> debugMode = (debugMode + 1) % 5;
+						case GLFW_KEY_M -> debugMode = (debugMode + 1) % 4; // Režimy 0-3 pro složky světla
+						case GLFW_KEY_O -> isPerspective = !isPerspective;
 
 						case GLFW_KEY_UP -> rotX += 0.1f;
 						case GLFW_KEY_DOWN -> rotX -= 0.1f;
 						case GLFW_KEY_LEFT -> rotY -= 0.1f;
 						case GLFW_KEY_RIGHT -> rotY += 0.1f;
+
+						// OVLÁDÁNÍ SVĚTLA
+						// OVLÁDÁNÍ SVĚTLA (nahrazeno L za U)
+						case GLFW_KEY_I -> lightPos = lightPos.add(new Vec3D(0, 0, 0.5));  // Nahoru
+						case GLFW_KEY_K -> lightPos = lightPos.add(new Vec3D(0, 0, -0.5)); // Dolů
+						case GLFW_KEY_J -> lightPos = lightPos.add(new Vec3D(-0.5, 0, 0)); // Vlevo
+						case GLFW_KEY_U -> lightPos = lightPos.add(new Vec3D(0.5, 0, 0));  // Vpravo
 
 						case GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true);
 					}
