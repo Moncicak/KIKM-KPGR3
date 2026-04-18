@@ -2,9 +2,8 @@
 in vec3 inPosition;
 uniform int mode;
 uniform float time;
-// Místo offsetu teď budeme používat matici, ale pro kompatibilitu
-// ji v Renderer.java už posíláme jako modelMatrix
-uniform mat4 modelMatrix;
+// Změna názvu uniformy, aby odpovídala tomu, co posíláme z Renderer.java
+uniform mat4 modelViewProjection;
 
 out vec3 vPos;
 out vec3 vNormal;
@@ -59,14 +58,14 @@ void main() {
     vec3 tangentU = pU - p;
     vec3 tangentV = pV - p;
 
-    // Normála zůstává vypočtená diferencí
+    // Normála vypočtená diferencí
     vNormal = normalize(cross(tangentU, tangentV));
 
     vPos = p;
     vTexCoord = inPosition.xy * 0.5 + 0.5;
     height = p.z;
 
-    // --- ZMĚNA TADY: Modelovací transformace pomocí matice ---
-    // modelMatrix v sobě nese posun (offset), rotaci v čase i rotaci od uživatele
-    gl_Position = modelMatrix * vec4(p, 1.0);
+    // Finální transformace vrcholu:
+    // bod p vynásobíme maticí, která obsahuje Model, View i Projection
+    gl_Position = modelViewProjection * vec4(p, 1.0);
 }

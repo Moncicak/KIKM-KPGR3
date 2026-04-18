@@ -2,8 +2,10 @@ import lwjglutils.OGLBuffers;
 import lwjglutils.OGLModelOBJ;
 import lwjglutils.ShaderUtils;
 import lwjglutils.ToFloatArray;
+import org.lwjgl.glfw.GLFWCursorPosCallback;
 import org.lwjgl.glfw.GLFWKeyCallback;
-import transforms.*; // Importujeme vše pro matice
+import org.lwjgl.glfw.GLFWMouseButtonCallback;
+import transforms.*;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
@@ -21,9 +23,14 @@ public class Renderer extends AbstractRenderer {
 
 	private int functionMode = 0;
 	private int debugMode = 0;
-
-	// NOVÉ: Proměnné pro ovládání transformace uživatelem
 	private float rotX = 0, rotY = 0;
+
+	// --- KAMERA A OVLÁDÁNÍ ---
+	private Camera camera = new Camera();
+	private Mat4 projection;
+	private boolean[] keys = new boolean[1024];
+	private boolean mousePressed = false;
+	private double oldX, oldY;
 
 	@Override
 	public void init() {
@@ -34,7 +41,6 @@ public class Renderer extends AbstractRenderer {
 
 		int m = 50;
 		int n = 50;
-
 		float[] vertices = GridMeshFactory.generateVertices(m, n);
 		OGLBuffers.Attrib[] attributes = { new OGLBuffers.Attrib("inPosition", 3) };
 
@@ -44,43 +50,69 @@ public class Renderer extends AbstractRenderer {
 		try {
 			staticBody = new OGLModelOBJ("/obj/StaticBody.obj");
 		} catch (Exception e) {
-			System.err.println("Nepodařilo se načíst model StaticBody.obj!");
+			System.err.println("Nepodařilo se načíst model!");
 		}
 
 		paramProgram = ShaderUtils.loadProgram("/shaders/start");
 		modelProgram = ShaderUtils.loadProgram("/shaders/static");
+
+		camera = camera.withPosition(new Vec3D(0, -3, 1))
+				.withAzimuth(Math.PI / 2)
+				.withZenith(-Math.PI / 8);
 	}
 
 	@Override
 	public void display() {
+		// Plynulý pohyb kamery
+		updateCamera();
+
+		// DŮLEŽITÉ: pass++ musíme volat ručně, protože nepoužíváme super.display()
 		pass++;
+
+		glViewport(0, 0, width, height);
 		glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+		// Aktualizace projekce pro případ změny velikosti okna
+		projection = new Mat4PerspRH(Math.PI / 3, height / (double) (width > 0 ? width : 1), 0.1, 50.0);
+
 		drawProceduralBody();
 		drawStaticBody();
+
+		// TextRenderer z AbstractRendereru
+		textRenderer.clear();
+		textRenderer.addStr2D(3, 20, "WSAD: pohyb kamery | Myš: rozhlížení | Šipky: rotace modelu");
+		textRenderer.addStr2D(3, 40, "1-6: funkce | M: debug režimy");
+		textRenderer.draw();
+	}
+
+	private void updateCamera() {
+		double speed = 0.05;
+		if (keys[GLFW_KEY_W]) camera = camera.forward(speed);
+		if (keys[GLFW_KEY_S]) camera = camera.backward(speed);
+		if (keys[GLFW_KEY_A]) camera = camera.left(speed);
+		if (keys[GLFW_KEY_D]) camera = camera.right(speed);
 	}
 
 	private void drawProceduralBody() {
 		glUseProgram(paramProgram);
 
-		// --- MODELOVACÍ TRANSFORMACE (Zadání bod 4) ---
-		// Vytvoříme matici: Rotace podle uživatele (rotX, rotY)
-		// + automatická rotace v čase (pass / 100.0)
-		// + posun doleva (Transl)
+		// ODEBRÁNO: (pass / 100.0) - nyní rotaci určují pouze šipky
 		Mat4 modelMatrix = new Mat4Transl(-0.6, 0, 0)
-				.mul(new Mat4RotXYZ(rotX, rotY + (pass / 100.0), 0));
+				.mul(new Mat4RotXYZ(rotX, rotY, 0));
 
-		int modelLoc = glGetUniformLocation(paramProgram, "modelMatrix");
-		glUniformMatrix4fv(modelLoc, false, ToFloatArray.convert(modelMatrix));
+		// MVP = Model * View * Projection
+		Mat4 mvp = modelMatrix.mul(camera.getViewMatrix()).mul(projection);
 
+		glUniformMatrix4fv(glGetUniformLocation(paramProgram, "modelViewProjection"), false, ToFloatArray.convert(mvp));
+
+		// Čas (pass) posíláme dál jen pro vlnění povrchu (např. u Sombrera)
 		glUniform1f(glGetUniformLocation(paramProgram, "time"), pass / 50.0f);
 		glUniform1i(glGetUniformLocation(paramProgram, "mode"), functionMode);
 		glUniform1i(glGetUniformLocation(paramProgram, "debugMode"), debugMode);
 
 		glPolygonMode(GL_FRONT_AND_BACK, renderMode);
 		drawGeometry();
-		glUseProgram(0);
 	}
 
 	private void drawStaticBody() {
@@ -89,12 +121,16 @@ public class Renderer extends AbstractRenderer {
 
 		// Modelová matice pro statické těleso (posun vpravo)
 		Mat4 model = new Mat4Transl(0.6, 0, 0).mul(new Mat4Scale(0.35));
-		glUniformMatrix4fv(glGetUniformLocation(modelProgram, "uModel"), false, ToFloatArray.convert(model));
+
+		// MVP pro statické těleso
+		Mat4 mvp = model.mul(camera.getViewMatrix()).mul(projection);
+
+		// Pozor: v static.vert musíš mít taky "modelViewProjection" uniformu
+		glUniformMatrix4fv(glGetUniformLocation(modelProgram, "modelViewProjection"), false, ToFloatArray.convert(mvp));
 		glUniform1i(glGetUniformLocation(modelProgram, "debugMode"), debugMode);
 		glUniform3f(glGetUniformLocation(modelProgram, "uColor"), 0.85f, 0.75f, 0.25f);
 
 		staticBody.getBuffers().draw(staticBody.getTopology(), modelProgram);
-		glUseProgram(0);
 	}
 
 	private void drawGeometry() {
@@ -105,36 +141,62 @@ public class Renderer extends AbstractRenderer {
 		}
 	}
 
-	protected GLFWKeyCallback keyCallback = new GLFWKeyCallback() {
-		@Override
-		public void invoke(long window, int key, int scancode, int action, int mods) {
-			if (action == GLFW_PRESS || action == GLFW_REPEAT) { // REPEAT pro plynulý pohyb
-				switch (key) {
-					case GLFW_KEY_P -> renderMode = GL_POINT;
-					case GLFW_KEY_L -> renderMode = GL_LINE;
-					case GLFW_KEY_F -> renderMode = GL_FILL;
-					case GLFW_KEY_T -> topology = GridTopology.TRIANGLES;
-					case GLFW_KEY_S -> topology = GridTopology.TRIANGLE_STRIP;
-					case GLFW_KEY_1 -> functionMode = 0;
-					case GLFW_KEY_2 -> functionMode = 1;
-					case GLFW_KEY_3 -> functionMode = 2;
-					case GLFW_KEY_4 -> functionMode = 3;
-					case GLFW_KEY_5 -> functionMode = 4;
-					case GLFW_KEY_6 -> functionMode = 5;
-					case GLFW_KEY_M -> debugMode = (debugMode + 1) % 5;
+	@Override
+	public GLFWKeyCallback getKeyCallback() {
+		return new GLFWKeyCallback() {
+			@Override
+			public void invoke(long window, int key, int scancode, int action, int mods) {
+				if (key < 0 || key >= 1024) return;
 
-					// OVLÁDÁNÍ TRANSFORMACE ŠIPKAMI
-					case GLFW_KEY_UP -> rotX += 0.1f;
-					case GLFW_KEY_DOWN -> rotX -= 0.1f;
-					case GLFW_KEY_LEFT -> rotY -= 0.1f;
-					case GLFW_KEY_RIGHT -> rotY += 0.1f;
+				if (action == GLFW_PRESS) keys[key] = true;
+				else if (action == GLFW_RELEASE) keys[key] = false;
 
-					case GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true);
+				if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+					switch (key) {
+						case GLFW_KEY_P -> renderMode = GL_POINT;
+						case GLFW_KEY_L -> renderMode = GL_LINE;
+						case GLFW_KEY_F -> renderMode = GL_FILL;
+						case GLFW_KEY_1 -> functionMode = 0;
+						case GLFW_KEY_2 -> functionMode = 1;
+						case GLFW_KEY_3 -> functionMode = 2;
+						case GLFW_KEY_4 -> functionMode = 3;
+						case GLFW_KEY_5 -> functionMode = 4;
+						case GLFW_KEY_6 -> functionMode = 5;
+						case GLFW_KEY_M -> debugMode = (debugMode + 1) % 5;
+
+						case GLFW_KEY_UP -> rotX += 0.1f;
+						case GLFW_KEY_DOWN -> rotX -= 0.1f;
+						case GLFW_KEY_LEFT -> rotY -= 0.1f;
+						case GLFW_KEY_RIGHT -> rotY += 0.1f;
+
+						case GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true);
+					}
 				}
 			}
-		}
-	};
+		};
+	}
 
 	@Override
-	public GLFWKeyCallback getKeyCallback() { return keyCallback; }
+	public GLFWMouseButtonCallback getMouseCallback() {
+		return new GLFWMouseButtonCallback() {
+			@Override
+			public void invoke(long window, int button, int action, int mods) {
+				if (button == GLFW_MOUSE_BUTTON_1) mousePressed = (action == GLFW_PRESS);
+			}
+		};
+	}
+
+	@Override
+	public GLFWCursorPosCallback getCursorCallback() {
+		return new GLFWCursorPosCallback() {
+			@Override
+			public void invoke(long window, double xpos, double ypos) {
+				if (mousePressed) {
+					camera = camera.addAzimuth((oldX - xpos) * 0.005);
+					camera = camera.addZenith((oldY - ypos) * 0.005);
+				}
+				oldX = xpos; oldY = ypos;
+			}
+		};
+	}
 }
