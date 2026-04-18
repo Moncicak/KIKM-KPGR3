@@ -156,7 +156,7 @@ public class Renderer extends AbstractRenderer {
     private boolean useDiffuse = true;
     private boolean useSpecular = true;
     private boolean useTexture = true;
-    private boolean useDeferred = true;
+    private boolean useDeferred = false;
     private double spotlightYaw = Math.PI;
     private double spotlightPitch = -0.65;
     private double spotlightInnerDegrees = 18.0;
@@ -181,7 +181,7 @@ public class Renderer extends AbstractRenderer {
         lightMarker = createLightMarker();
 
         try {
-            elephantModel = new OGLModelOBJ("obj/ElephantBody.obj");
+            elephantModel = new OGLModelOBJ("/obj/ElephantBody.obj");
             surfaceTexture = new OGLTexture2D("textures/bricks.jpg");
             shadowDepthTexture = new OGLTexture2D(new OGLTexImageFloat(SHADOW_SIZE, SHADOW_SIZE, new OGLTexImageFloat.FormatDepth()));
         } catch (IOException e) {
@@ -336,6 +336,8 @@ public class Renderer extends AbstractRenderer {
 
     private void renderDeferredComposite(Mat4 view, Mat4 projection, Mat4 lightViewProjection, Vec3D cameraPosition, Vec3D lightPosition) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDrawBuffer(GL_BACK);
+        glReadBuffer(GL_BACK);
         glViewport(0, 0, width, height);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glDisable(GL_DEPTH_TEST);
@@ -419,6 +421,8 @@ public class Renderer extends AbstractRenderer {
 
         glDisable(GL_POLYGON_OFFSET_FILL);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDrawBuffer(GL_BACK);
+        glReadBuffer(GL_BACK);
         glViewport(0, 0, width, height);
     }
 
