@@ -1,13 +1,15 @@
 #version 330
-in vec3 inPosition;
-in vec3 inNormal;   // OGLModelOBJ obvykle posílá i normály
-uniform mat4 modelViewProjection;
+in vec4 inPosition;
+in vec3 inNormal;
 
-out vec3 vPos;
-out vec3 vNormal;
+uniform mat4 modelViewProjection;
+uniform mat4 modelViewMatrix;
+
+out vec3 vViewPos;
+out vec3 vViewNormal;
 
 void main() {
-    vPos = inPosition;
-    vNormal = inNormal;
-    gl_Position = modelViewProjection * vec4(inPosition, 1.0);
+    vViewPos = vec3(modelViewMatrix * inPosition);
+    vViewNormal = normalize(mat3(modelViewMatrix) * inNormal);
+    gl_Position = modelViewProjection * inPosition;
 }

@@ -1,19 +1,15 @@
 #version 330
-in vec3 vPos;
-in vec3 vNormal;
-uniform int debugMode;
-uniform vec3 uColor; // Ta žlutá barva z Renderer.java
+in vec3 vViewPos;
+in vec3 vViewNormal;
 
-out vec4 outColor;
+uniform vec3 uColor;
+
+layout(location = 0) out vec4 gPosition;
+layout(location = 1) out vec4 gNormal;
+layout(location = 2) out vec4 gAlbedo;
 
 void main() {
-    if (debugMode == 0) {
-        outColor = vec4(uColor, 1.0);
-    } else if (debugMode == 1) {
-        outColor = vec4(vPos * 0.5 + 0.5, 1.0);
-    } else if (debugMode == 2) {
-        outColor = vec4(vNormal * 0.5 + 0.5, 1.0);
-    } else {
-        outColor = vec4(1.0); // Bílá pro hloubku/ostatní
-    }
+    gPosition = vec4(vViewPos, 1.0);
+    gNormal = vec4(normalize(vViewNormal), 1.0);
+    gAlbedo = vec4(uColor, 1.0);
 }
