@@ -24,6 +24,7 @@ import static org.lwjgl.glfw.GLFW.GLFW_KEY_4;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_5;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_6;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_A;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_B;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_D;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_F;
@@ -40,6 +41,9 @@ import static org.lwjgl.glfw.GLFW.GLFW_KEY_U;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_UP;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_DOWN;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_W;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_X;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_Z;
+import static org.lwjgl.glfw.GLFW.GLFW_KEY_C;
 import static org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_1;
 import static org.lwjgl.glfw.GLFW.GLFW_PRESS;
 import static org.lwjgl.glfw.GLFW.GLFW_RELEASE;
@@ -47,7 +51,6 @@ import static org.lwjgl.glfw.GLFW.GLFW_REPEAT;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_LEFT;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_RIGHT;
 import static org.lwjgl.glfw.GLFW.glfwSetWindowShouldClose;
-import static org.lwjgl.opengl.GL11.GL_BACK;
 import static org.lwjgl.opengl.GL11.GL_COLOR_BUFFER_BIT;
 import static org.lwjgl.opengl.GL11.GL_CULL_FACE;
 import static org.lwjgl.opengl.GL11.GL_DEPTH_BUFFER_BIT;
@@ -100,6 +103,10 @@ public class Renderer extends AbstractRenderer {
 	private int renderMode = GL_FILL;
 	private int functionMode = 0;
 	private int debugMode = 0;
+	private boolean ambientEnabled = true;
+	private boolean diffuseEnabled = true;
+	private boolean specularEnabled = true;
+	private boolean spotlightEnabled = true;
 	private float rotX = 0.0f;
 	private float rotY = 0.0f;
 
@@ -112,6 +119,16 @@ public class Renderer extends AbstractRenderer {
 	private boolean isPerspective = true;
 
 	private Vec3D lightPos = new Vec3D(1.5, 1.5, 2.0);
+	private float spotInnerDeg = 16.0f;
+	private float spotOuterDeg = 24.0f;
+	private static final String[] DEBUG_MODE_NAMES = {
+			"Final lighting",
+			"AO raw",
+			"AO blur",
+			"Normals",
+			"View-space position",
+			"Spotlight factor"
+	};
 
 	@Override
 	public void init() {
@@ -163,11 +180,14 @@ public class Renderer extends AbstractRenderer {
 
 		Mat4 view = camera.getViewMatrix();
 		Vec3D lightPosView = toViewSpace(lightPos, view);
+		Vec3D spotTargetWorld = new Vec3D(0.0, 0.0, 0.0);
+		Vec3D lightDirWorld = spotTargetWorld.sub(lightPos).normalized().orElse(new Vec3D(0.0, 0.0, -1.0));
+		Vec3D spotDirView = toViewDirection(lightDirWorld, view);
 
 		renderGeometryPass(view);
 		renderAoPass();
 		renderBlurPass();
-		renderCompositePass(lightPosView);
+		renderCompositePass(lightPosView, spotDirView);
 
 		if (debugMode == 0) {
 			renderLightMarker(view);
@@ -286,7 +306,7 @@ public class Renderer extends AbstractRenderer {
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	}
 
-	private void renderCompositePass(Vec3D lightPosView) {
+	private void renderCompositePass(Vec3D lightPosView, Vec3D spotDirView) {
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		glViewport(0, 0, width, height);
 		glClearColor(0.04f, 0.05f, 0.07f, 1.0f);
@@ -303,9 +323,17 @@ public class Renderer extends AbstractRenderer {
 
 		glUniform3f(glGetUniformLocation(compositeProgram, "uLightPosView"),
 				(float) lightPosView.getX(), (float) lightPosView.getY(), (float) lightPosView.getZ());
+		glUniform3f(glGetUniformLocation(compositeProgram, "uSpotDirView"),
+				(float) spotDirView.getX(), (float) spotDirView.getY(), (float) spotDirView.getZ());
 		glUniform3f(glGetUniformLocation(compositeProgram, "uLightColor"), 2.0f, 2.0f, 1.8f);
 		glUniform1f(glGetUniformLocation(compositeProgram, "uAmbientStrength"), 0.12f);
+		glUniform1f(glGetUniformLocation(compositeProgram, "uSpotInnerCutoff"), (float) Math.cos(Math.toRadians(spotInnerDeg)));
+		glUniform1f(glGetUniformLocation(compositeProgram, "uSpotOuterCutoff"), (float) Math.cos(Math.toRadians(spotOuterDeg)));
 		glUniform1i(glGetUniformLocation(compositeProgram, "debugMode"), debugMode);
+		glUniform1i(glGetUniformLocation(compositeProgram, "uAmbientEnabled"), ambientEnabled ? 1 : 0);
+		glUniform1i(glGetUniformLocation(compositeProgram, "uDiffuseEnabled"), diffuseEnabled ? 1 : 0);
+		glUniform1i(glGetUniformLocation(compositeProgram, "uSpecularEnabled"), specularEnabled ? 1 : 0);
+		glUniform1i(glGetUniformLocation(compositeProgram, "uSpotEnabled"), spotlightEnabled ? 1 : 0);
 
 		screenQuad.draw(GL_TRIANGLE_STRIP, compositeProgram);
 		glUseProgram(0);
@@ -376,6 +404,11 @@ public class Renderer extends AbstractRenderer {
 		return p.dehomog().orElse(worldPos);
 	}
 
+	private Vec3D toViewDirection(Vec3D worldDir, Mat4 view) {
+		Point3D d = new Point3D(worldDir.getX(), worldDir.getY(), worldDir.getZ(), 0.0).mul(view);
+		return new Vec3D(d.getX(), d.getY(), d.getZ()).normalized().orElse(new Vec3D(0.0, 0.0, -1.0));
+	}
+
 	@Override
 	public GLFWKeyCallback getKeyCallback() {
 		return new GLFWKeyCallback() {
@@ -402,7 +435,10 @@ public class Renderer extends AbstractRenderer {
 						case GLFW_KEY_4 -> functionMode = 3;
 						case GLFW_KEY_5 -> functionMode = 4;
 						case GLFW_KEY_6 -> functionMode = 5;
-						case GLFW_KEY_M -> debugMode = (debugMode + 1) % 5;
+						case GLFW_KEY_M -> {
+							debugMode = (debugMode + 1) % DEBUG_MODE_NAMES.length;
+							System.out.println("Debug mode: " + DEBUG_MODE_NAMES[debugMode]);
+						}
 						case GLFW_KEY_O -> isPerspective = !isPerspective;
 						case GLFW_KEY_UP -> rotX += 0.1f;
 						case GLFW_KEY_DOWN -> rotX -= 0.1f;
@@ -412,11 +448,38 @@ public class Renderer extends AbstractRenderer {
 						case GLFW_KEY_K -> lightPos = lightPos.add(new Vec3D(0.0, 0.0, -0.2));
 						case GLFW_KEY_J -> lightPos = lightPos.add(new Vec3D(-0.2, 0.0, 0.0));
 						case GLFW_KEY_U -> lightPos = lightPos.add(new Vec3D(0.2, 0.0, 0.0));
+						case GLFW_KEY_Z -> {
+							ambientEnabled = !ambientEnabled;
+							printLightingToggles();
+						}
+						case GLFW_KEY_X -> {
+							diffuseEnabled = !diffuseEnabled;
+							printLightingToggles();
+						}
+						case GLFW_KEY_C -> {
+							specularEnabled = !specularEnabled;
+							printLightingToggles();
+						}
+						case GLFW_KEY_B -> {
+							spotlightEnabled = !spotlightEnabled;
+							System.out.println("Spotlight: " + onOff(spotlightEnabled)
+									+ " (inner " + spotInnerDeg + " deg, outer " + spotOuterDeg + " deg)");
+						}
 						case GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true);
 					}
 				}
 			}
 		};
+	}
+
+	private void printLightingToggles() {
+		System.out.println("Lighting toggles -> ambient: " + onOff(ambientEnabled)
+				+ ", diffuse: " + onOff(diffuseEnabled)
+				+ ", specular: " + onOff(specularEnabled));
+	}
+
+	private String onOff(boolean enabled) {
+		return enabled ? "ON" : "OFF";
 	}
 
 	@Override
