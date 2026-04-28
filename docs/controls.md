@@ -1,23 +1,14 @@
 # Ovládání
 
-- `W`, `A`, `S`, `D` - pohyb kamery v first-person režimu
-- `Q`, `E` - pohyb kamery nahoru a dolů
-- `LMB` + myš - rozhlížení
-- `V` - přepnutí perspektiva / ortho
-- `M` - přepnutí fill / wireframe / points
-- `N` - přepnutí triangle list / triangle strip
-- `B` - přepnutí parametrického povrchu
-- `0` - lit zobrazení
-- `1` - debug pozice
-- `2` - debug normály
-- `3` - debug UV souřadnic
-- `4` - debug hloubky
-- `5` - debug textury
-- `6` - přepnutí ambient složky
-- `7` - přepnutí diffuse složky
-- `8` - přepnutí specular složky
-- `T` - přepnutí textury zapnutá / vypnutá
-- `F` - přepnutí forward / deferred + AO
-- `Šipky` - změna směru reflektoru
-- `[` / `]` - změna úhlu reflektoru
-- `R` - reset kamery
+- `W`, `A`, `S`, `D` - pohyb kamery vpřed, vlevo, vzad, vpravo
+- `LMB` + myš - rozhlížení kamery
+- `O` - přepnutí perspektivní / ortogonální projekce
+- `P`, `L`, `F` - body, hrany, vyplněné plochy
+- `T`, `S` - triangle list / triangle strip pro grid
+- `1` až `6` - volba jedné ze šesti parametrických funkcí
+- `M` - přepínání debug režimů (v konzoli se vypíše aktivní mód): final lighting, AO raw, AO blur, normals, view-space position, spotlight factor, albedo/texture, UV, depth (view), distance from light, shadow factor
+- `I`, `J`, `K`, `U` - posun světla v prostoru
+- `Z`, `X`, `C` - zap/vyp ambient, diffuse a specular složky Blinn-Phong (stav se vypíše do konzole)
+- `B` - zap/vyp reflektor (spotlight)
+- `Šipky` - rotace procedurálního tělesa
+- `Esc` - ukončení aplikace

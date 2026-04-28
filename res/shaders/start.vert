@@ -5,9 +5,12 @@ uniform int mode;
 uniform float time;
 uniform mat4 modelViewProjection;
 uniform mat4 modelViewMatrix;
+uniform mat4 modelMatrix;
 
 out vec3 vViewPos;
 out vec3 vViewNormal;
+out vec3 vWorldPos;
+out vec2 vTexCoord;
 
 const float PI = 3.1415926535;
 
@@ -15,8 +18,10 @@ vec3 getPosition(float u, float v) {
     vec3 p = vec3(u, v, 0.0);
 
     if (mode == 0) {
+        // Stabilized sinc-like surface: avoid singularity around r -> 0.
         float r = sqrt(u * u + v * v) * 10.0;
-        p.z = (r == 0.0) ? 0.3 : (sin(r - time * 2.0) / r) * 0.3;
+        float rs = max(r, 0.15);
+        p.z = (sin(r - time * 2.0) / rs) * 0.22;
         p.xy *= 0.5;
     }
     else if (mode == 1) {
@@ -46,6 +51,7 @@ vec3 getPosition(float u, float v) {
         p = vec3((R + rb * cos(psi)) * cos(phi), (R + rb * cos(psi)) * sin(phi), rb * sin(psi));
     }
 
+    p.z = clamp(p.z, -1.0, 1.0);
     return p;
 }
 
@@ -64,5 +70,7 @@ void main() {
 
     vViewPos = vec3(modelViewMatrix * vec4(p, 1.0));
     vViewNormal = normalize(mat3(modelViewMatrix) * normal);
+    vWorldPos = vec3(modelMatrix * vec4(p, 1.0));
+    vTexCoord = vec2(u, v) * 0.5 + 0.5;
     gl_Position = modelViewProjection * vec4(p, 1.0);
 }

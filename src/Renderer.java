@@ -1,6 +1,7 @@
 import lwjglutils.OGLBuffers;
 import lwjglutils.OGLModelOBJ;
 import lwjglutils.OGLRenderTarget;
+import lwjglutils.OGLTexture2D;
 import lwjglutils.OGLTexImageFloat;
 import lwjglutils.ShaderUtils;
 import lwjglutils.ToFloatArray;
@@ -14,8 +15,11 @@ import transforms.Mat4PerspRH;
 import transforms.Mat4RotXYZ;
 import transforms.Mat4Scale;
 import transforms.Mat4Transl;
+import transforms.Mat4ViewRH;
 import transforms.Point3D;
 import transforms.Vec3D;
+
+import java.nio.ByteBuffer;
 
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_1;
 import static org.lwjgl.glfw.GLFW.GLFW_KEY_2;
@@ -59,8 +63,10 @@ import static org.lwjgl.opengl.GL11.GL_FILL;
 import static org.lwjgl.opengl.GL11.GL_FRONT_AND_BACK;
 import static org.lwjgl.opengl.GL11.GL_LINE;
 import static org.lwjgl.opengl.GL11.GL_POINT;
+import static org.lwjgl.opengl.GL11.GL_RGBA;
 import static org.lwjgl.opengl.GL11.GL_TRIANGLE_STRIP;
 import static org.lwjgl.opengl.GL11.GL_TRIANGLES;
+import static org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE;
 import static org.lwjgl.opengl.GL11.glClear;
 import static org.lwjgl.opengl.GL11.glClearColor;
 import static org.lwjgl.opengl.GL11.glDisable;
@@ -75,17 +81,22 @@ import static org.lwjgl.opengl.GL20.glUniform3f;
 import static org.lwjgl.opengl.GL20.glUniformMatrix4fv;
 import static org.lwjgl.opengl.GL20.glUseProgram;
 import static org.lwjgl.opengl.GL30.GL_FRAMEBUFFER;
+import static org.lwjgl.opengl.GL30.GL_RGBA8;
 import static org.lwjgl.opengl.GL30.glBindFramebuffer;
 
 public class Renderer extends AbstractRenderer {
-	private static final int GBUFFER_COLOR_ATTACHMENTS = 3;
+	private static final int GBUFFER_COLOR_ATTACHMENTS = 5;
+	private static final int SHADOW_MAP_SIZE = 2048;
 	private static final float AO_SAMPLE_RADIUS = 0.35f;
 	private static final float AO_PIXEL_RADIUS = 12.0f;
 	private static final float AO_BIAS = 0.015f;
+	private static final float SHADOW_BIAS = 0.0025f;
 
 	private int paramProgram;
 	private int staticProgram;
 	private int lightProgram;
+	private int shadowParamProgram;
+	private int shadowStaticProgram;
 	private int aoProgram;
 	private int blurProgram;
 	private int compositeProgram;
@@ -98,6 +109,8 @@ public class Renderer extends AbstractRenderer {
 	private OGLRenderTarget gBuffer;
 	private OGLRenderTarget aoTarget;
 	private OGLRenderTarget aoBlurTarget;
+	private OGLRenderTarget shadowTarget;
+	private OGLTexture2D surfaceTexture;
 
 	private GridTopology topology = GridTopology.TRIANGLES;
 	private int renderMode = GL_FILL;
@@ -127,7 +140,12 @@ public class Renderer extends AbstractRenderer {
 			"AO blur",
 			"Normals",
 			"View-space position",
-			"Spotlight factor"
+			"Spotlight factor",
+			"Albedo/Texture",
+			"UV",
+			"Depth (view)",
+			"Distance from light",
+			"Shadow factor"
 	};
 
 	@Override
@@ -154,9 +172,12 @@ public class Renderer extends AbstractRenderer {
 		paramProgram = ShaderUtils.loadProgram("/shaders/start");
 		staticProgram = ShaderUtils.loadProgram("/shaders/static");
 		lightProgram = ShaderUtils.loadProgram("/shaders/light");
+		shadowParamProgram = ShaderUtils.loadProgram(new String[]{"/shaders/shadow_param", "/shaders/shadow"});
+		shadowStaticProgram = ShaderUtils.loadProgram(new String[]{"/shaders/shadow_static", "/shaders/shadow"});
 		aoProgram = ShaderUtils.loadProgram(new String[] { "/shaders/screen", "/shaders/ao" });
 		blurProgram = ShaderUtils.loadProgram(new String[] { "/shaders/screen", "/shaders/blur" });
 		compositeProgram = ShaderUtils.loadProgram(new String[] { "/shaders/screen", "/shaders/composite" });
+		surfaceTexture = createCheckerTexture(256, 256);
 
 		camera = camera.withPosition(new Vec3D(0.0, -3.0, 1.0))
 				.withAzimuth(Math.PI / 2.0)
@@ -179,15 +200,19 @@ public class Renderer extends AbstractRenderer {
 		}
 
 		Mat4 view = camera.getViewMatrix();
+		Vec3D lightTargetWorld = new Vec3D(0.0, 0.0, 0.0);
+		Mat4 lightView = new Mat4ViewRH(lightPos, lightTargetWorld.sub(lightPos), new Vec3D(0.0, 0.0, 1.0));
+		Mat4 lightProjection = new Mat4PerspRH(Math.toRadians(70.0), 1.0, 0.1, 20.0);
+		Mat4 lightViewProjection = lightView.mul(lightProjection);
 		Vec3D lightPosView = toViewSpace(lightPos, view);
-		Vec3D spotTargetWorld = new Vec3D(0.0, 0.0, 0.0);
-		Vec3D lightDirWorld = spotTargetWorld.sub(lightPos).normalized().orElse(new Vec3D(0.0, 0.0, -1.0));
+		Vec3D lightDirWorld = lightTargetWorld.sub(lightPos).normalized().orElse(new Vec3D(0.0, 0.0, -1.0));
 		Vec3D spotDirView = toViewDirection(lightDirWorld, view);
 
+		renderShadowPass(lightViewProjection);
 		renderGeometryPass(view);
 		renderAoPass();
 		renderBlurPass();
-		renderCompositePass(lightPosView, spotDirView);
+		renderCompositePass(lightPosView, spotDirView, lightViewProjection);
 
 		if (debugMode == 0) {
 			renderLightMarker(view);
@@ -218,6 +243,9 @@ public class Renderer extends AbstractRenderer {
 			aoTarget = new OGLRenderTarget(width, height, 1, new OGLTexImageFloat.Format(1));
 			aoBlurTarget = new OGLRenderTarget(width, height, 1, new OGLTexImageFloat.Format(1));
 		}
+		if (shadowTarget == null) {
+			shadowTarget = new OGLRenderTarget(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 1, new OGLTexImageFloat.Format(1));
+		}
 	}
 
 	private void renderGeometryPass(Mat4 view) {
@@ -233,6 +261,37 @@ public class Renderer extends AbstractRenderer {
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	}
 
+	private void renderShadowPass(Mat4 lightViewProjection) {
+		if (shadowTarget == null) {
+			return;
+		}
+
+		shadowTarget.bind();
+		glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glEnable(GL_DEPTH_TEST);
+		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+		glUseProgram(shadowParamProgram);
+		Mat4 modelMatrixParam = new Mat4Transl(-0.6, 0.0, 0.0).mul(new Mat4RotXYZ(rotX, rotY, 0.0));
+		Mat4 lightMvpParam = modelMatrixParam.mul(lightViewProjection);
+		glUniformMatrix4fv(glGetUniformLocation(shadowParamProgram, "lightMVP"), false, ToFloatArray.convert(lightMvpParam));
+		glUniform1f(glGetUniformLocation(shadowParamProgram, "time"), pass / 50.0f);
+		glUniform1i(glGetUniformLocation(shadowParamProgram, "mode"), functionMode);
+		drawGeometry(shadowParamProgram);
+
+		if (staticBody != null && staticBody.getBuffers() != null) {
+			glUseProgram(shadowStaticProgram);
+			Mat4 modelMatrixStatic = new Mat4Transl(0.6, 0.0, 0.0).mul(new Mat4Scale(0.35));
+			Mat4 lightMvpStatic = modelMatrixStatic.mul(lightViewProjection);
+			glUniformMatrix4fv(glGetUniformLocation(shadowStaticProgram, "lightMVP"), false, ToFloatArray.convert(lightMvpStatic));
+			staticBody.getBuffers().draw(staticBody.getTopology(), shadowStaticProgram);
+		}
+
+		glUseProgram(0);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	}
+
 	private void drawProceduralBody(Mat4 view) {
 		glUseProgram(paramProgram);
 
@@ -242,12 +301,16 @@ public class Renderer extends AbstractRenderer {
 
 		glUniformMatrix4fv(glGetUniformLocation(paramProgram, "modelViewProjection"), false, ToFloatArray.convert(mvp));
 		glUniformMatrix4fv(glGetUniformLocation(paramProgram, "modelViewMatrix"), false, ToFloatArray.convert(modelViewMatrix));
+		glUniformMatrix4fv(glGetUniformLocation(paramProgram, "modelMatrix"), false, ToFloatArray.convert(modelMatrix));
 		glUniform1f(glGetUniformLocation(paramProgram, "time"), pass / 50.0f);
 		glUniform1i(glGetUniformLocation(paramProgram, "mode"), functionMode);
 		Vec3D color = proceduralColor(functionMode);
 		glUniform3f(glGetUniformLocation(paramProgram, "uColor"), (float) color.getX(), (float) color.getY(), (float) color.getZ());
+		if (surfaceTexture != null) {
+			surfaceTexture.bind(paramProgram, "uSurfaceTex", 0);
+		}
 
-		drawGeometry();
+		drawGeometry(paramProgram);
 	}
 
 	private void drawStaticBody(Mat4 view) {
@@ -263,7 +326,11 @@ public class Renderer extends AbstractRenderer {
 
 		glUniformMatrix4fv(glGetUniformLocation(staticProgram, "modelViewProjection"), false, ToFloatArray.convert(mvp));
 		glUniformMatrix4fv(glGetUniformLocation(staticProgram, "modelViewMatrix"), false, ToFloatArray.convert(modelViewMatrix));
+		glUniformMatrix4fv(glGetUniformLocation(staticProgram, "modelMatrix"), false, ToFloatArray.convert(modelMatrix));
 		glUniform3f(glGetUniformLocation(staticProgram, "uColor"), 0.85f, 0.75f, 0.25f);
+		if (surfaceTexture != null) {
+			surfaceTexture.bind(staticProgram, "uSurfaceTex", 0);
+		}
 
 		staticBody.getBuffers().draw(staticBody.getTopology(), staticProgram);
 	}
@@ -306,7 +373,7 @@ public class Renderer extends AbstractRenderer {
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	}
 
-	private void renderCompositePass(Vec3D lightPosView, Vec3D spotDirView) {
+	private void renderCompositePass(Vec3D lightPosView, Vec3D spotDirView, Mat4 lightViewProjection) {
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		glViewport(0, 0, width, height);
 		glClearColor(0.04f, 0.05f, 0.07f, 1.0f);
@@ -318,17 +385,27 @@ public class Renderer extends AbstractRenderer {
 		gBuffer.bindColorTexture(compositeProgram, "uPositionTex", 0, 0);
 		gBuffer.bindColorTexture(compositeProgram, "uNormalTex", 1, 1);
 		gBuffer.bindColorTexture(compositeProgram, "uAlbedoTex", 2, 2);
-		aoTarget.bindColorTexture(compositeProgram, "uAOTex", 3, 0);
-		aoBlurTarget.bindColorTexture(compositeProgram, "uAOBlurTex", 4, 0);
+		gBuffer.bindColorTexture(compositeProgram, "uWorldPosTex", 3, 3);
+		gBuffer.bindColorTexture(compositeProgram, "uUVTex", 4, 4);
+		aoTarget.bindColorTexture(compositeProgram, "uAOTex", 5, 0);
+		aoBlurTarget.bindColorTexture(compositeProgram, "uAOBlurTex", 6, 0);
+		if (shadowTarget != null) {
+			shadowTarget.bindDepthTexture(compositeProgram, "uShadowDepthTex", 7);
+		}
 
 		glUniform3f(glGetUniformLocation(compositeProgram, "uLightPosView"),
 				(float) lightPosView.getX(), (float) lightPosView.getY(), (float) lightPosView.getZ());
+		glUniform3f(glGetUniformLocation(compositeProgram, "uLightPosWorld"),
+				(float) lightPos.getX(), (float) lightPos.getY(), (float) lightPos.getZ());
 		glUniform3f(glGetUniformLocation(compositeProgram, "uSpotDirView"),
 				(float) spotDirView.getX(), (float) spotDirView.getY(), (float) spotDirView.getZ());
 		glUniform3f(glGetUniformLocation(compositeProgram, "uLightColor"), 2.0f, 2.0f, 1.8f);
 		glUniform1f(glGetUniformLocation(compositeProgram, "uAmbientStrength"), 0.12f);
 		glUniform1f(glGetUniformLocation(compositeProgram, "uSpotInnerCutoff"), (float) Math.cos(Math.toRadians(spotInnerDeg)));
 		glUniform1f(glGetUniformLocation(compositeProgram, "uSpotOuterCutoff"), (float) Math.cos(Math.toRadians(spotOuterDeg)));
+		glUniformMatrix4fv(glGetUniformLocation(compositeProgram, "uLightViewProjection"), false, ToFloatArray.convert(lightViewProjection));
+		glUniform2f(glGetUniformLocation(compositeProgram, "uShadowTexelSize"), 1.0f / SHADOW_MAP_SIZE, 1.0f / SHADOW_MAP_SIZE);
+		glUniform1f(glGetUniformLocation(compositeProgram, "uShadowBias"), SHADOW_BIAS);
 		glUniform1i(glGetUniformLocation(compositeProgram, "debugMode"), debugMode);
 		glUniform1i(glGetUniformLocation(compositeProgram, "uAmbientEnabled"), ambientEnabled ? 1 : 0);
 		glUniform1i(glGetUniformLocation(compositeProgram, "uDiffuseEnabled"), diffuseEnabled ? 1 : 0);
@@ -361,14 +438,14 @@ public class Renderer extends AbstractRenderer {
 		glEnable(GL_DEPTH_TEST);
 	}
 
-	private void drawGeometry() {
+	private void drawGeometry(int programId) {
 		if (topology == GridTopology.TRIANGLES) {
 			if (buffersList != null) {
-				buffersList.draw(GL_TRIANGLES, paramProgram);
+				buffersList.draw(GL_TRIANGLES, programId);
 			}
 		} else {
 			if (buffersStrip != null) {
-				buffersStrip.draw(GL_TRIANGLE_STRIP, paramProgram);
+				buffersStrip.draw(GL_TRIANGLE_STRIP, programId);
 			}
 		}
 	}
@@ -386,6 +463,22 @@ public class Renderer extends AbstractRenderer {
 				new OGLBuffers.Attrib("inTexCoord", 2)
 		};
 		return new OGLBuffers(vertexData, attributes, indices);
+	}
+
+	private OGLTexture2D createCheckerTexture(int width, int height) {
+		ByteBuffer data = ByteBuffer.allocateDirect(width * height * 4);
+		int tile = 16;
+		for (int y = 0; y < height; y++) {
+			for (int x = 0; x < width; x++) {
+				boolean dark = ((x / tile) + (y / tile)) % 2 == 0;
+				int r = dark ? 35 : 220;
+				int g = dark ? 45 : 210;
+				int b = dark ? 65 : 180;
+				data.put((byte) r).put((byte) g).put((byte) b).put((byte) 255);
+			}
+		}
+		data.flip();
+		return new OGLTexture2D(width, height, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, data);
 	}
 
 	private Vec3D proceduralColor(int mode) {
