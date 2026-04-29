@@ -92,7 +92,7 @@ public class LwjglWindow {
 
 		// Setup a key callback. It will be called every time a key is pressed, repeated or released.
 		glfwSetKeyCallback(window, renderer.getKeyCallback());
-		glfwSetWindowSizeCallback(window,renderer.getWsCallback());
+		glfwSetFramebufferSizeCallback(window, renderer.getFsCallback());
 		glfwSetMouseButtonCallback(window,renderer.getMouseCallback());
 		glfwSetCursorPosCallback(window,renderer.getCursorCallback());
 		glfwSetScrollCallback(window,renderer.getScrollCallback());
@@ -174,7 +174,12 @@ public class LwjglWindow {
 		if (DEBUG)
 			GLUtil.setupDebugMessageCallback();
 
-		renderer.getWsCallback().invoke(window, WIDTH, HEIGHT);
+		try ( MemoryStack stack = stackPush() ) {
+			IntBuffer fbWidth = stack.mallocInt(1);
+			IntBuffer fbHeight = stack.mallocInt(1);
+			glfwGetFramebufferSize(window, fbWidth, fbHeight);
+			renderer.getFsCallback().invoke(window, fbWidth.get(0), fbHeight.get(0));
+		}
 
 		renderer.init();
 

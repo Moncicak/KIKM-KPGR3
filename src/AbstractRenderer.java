@@ -1,9 +1,9 @@
 
 import org.lwjgl.glfw.GLFWCursorPosCallback;
+import org.lwjgl.glfw.GLFWFramebufferSizeCallback;
 import org.lwjgl.glfw.GLFWKeyCallback;
 import org.lwjgl.glfw.GLFWMouseButtonCallback;
 import org.lwjgl.glfw.GLFWScrollCallback;
-import org.lwjgl.glfw.GLFWWindowSizeCallback;
 
 import lwjglutils.OGLTextRenderer;
 import lwjglutils.OGLUtils;
@@ -82,13 +82,13 @@ public abstract class AbstractRenderer {
 		}
 	};
     
-	protected GLFWWindowSizeCallback wsCallback = new GLFWWindowSizeCallback() {
+	protected GLFWFramebufferSizeCallback fsCallback = new GLFWFramebufferSizeCallback() {
         @Override
         public void invoke(long window, int w, int h) {
             if (w > 0 && h > 0) {
             	width = w;
             	height = h;
-            	System.out.println("Windows resize to [" + w + ", " + h + "]");
+            	System.out.println("Framebuffer resize to [" + w + ", " + h + "]");
             	if (textRenderer != null)
             		textRenderer.resize(width, height);
             }
@@ -134,8 +134,8 @@ public abstract class AbstractRenderer {
 		return keyCallback;
 	}
 
-	public GLFWWindowSizeCallback getWsCallback() {
-		return wsCallback;
+	public GLFWFramebufferSizeCallback getFsCallback() {
+		return fsCallback;
 	}
 
 	public GLFWMouseButtonCallback getMouseCallback() {
